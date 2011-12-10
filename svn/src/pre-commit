@@ -1,0 +1,21 @@
+#!/bin/sh
+export LANG=en_US.UTF-8
+
+REPOS="$1"
+TXN="$2"
+TYPE="$3"
+if test -z "$TYPE" ; then
+    TYPE="-t"
+fi
+
+SVNLOOK=/usr/local/bin/svnlook
+CODEP=/root/workspace/codep/svn/src
+
+set -e
+exec 1>&2
+
+${CODEP}/pre-commit.sh "$REPOS" "$TXN" "$TYPE" || exit 196
+${CODEP}/pre-commit.py "$REPOS" "$TXN" || exit 195
+
+# All checks passed, so allow the commit.
+exit 0
