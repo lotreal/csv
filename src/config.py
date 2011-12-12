@@ -2,5 +2,5 @@
 
 branches = [
     'branches/v2/upload/',
-    'trunk',
+    'trunk/',
     ]

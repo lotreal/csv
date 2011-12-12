@@ -9,13 +9,13 @@ if test -z "$TYPE" ; then
 fi
 
 SVNLOOK=/usr/local/bin/svnlook
-CODEP=/root/workspace/codep/svn/src
+CSV=/opt/csv/src
 
 set -e
 exec 1>&2
 
-${CODEP}/pre-commit.sh "$REPOS" "$TXN" "$TYPE" || exit 196
-${CODEP}/pre-commit.py "$REPOS" "$TXN" || exit 195
+${CSV}/pre-commit.py "$REPOS" "$TXN" || exit 195
+${CSV}/pre-commit.sh "$REPOS" "$TXN" "$TYPE" || exit 196
 
 # All checks passed, so allow the commit.
 exit 0

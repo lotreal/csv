@@ -5,22 +5,26 @@
 import os
 import sys
 
-LOG_LEVEL = 0
-
-def dump(obj):
-    '''return a printable representation of an object for debugging'''
-    newobj=obj
-    if '__dict__' in dir(obj):
-        newobj=obj.__dict__
-        if ' object at ' in str(obj) and not newobj.has_key('__type__'):
-            newobj['__type__']=str(obj)
-        for attr in newobj:
-            newobj[attr]=dump(newobj[attr])
-    return newobj
-
 class Context:
     def __init__(self):
+        self.log_level = 0
         self.__branches = []
+
+    def log(self, str):
+        self.log_level > 0 and print_err('[LOG] %s' % str)
+
+    def set_backend(self, look_cmd):
+        self.look_cmd = look_cmd
+        self.commit_log = command_output(look_cmd % "log").strip(' \t\n\r')
+        # if commit log contain '[LOG]', open debug mode
+        if self.runas_debug():
+            self.log_level = 9
+
+    def runas_init(self):
+        return self.commit_log.find('[INIT]') >= 0
+
+    def runas_debug(self):
+        return self.commit_log.find('[LOG]') >= 0
 
     def set_branches(self, repos):
         sys.path.append("%s/hooks" % repos)
@@ -34,27 +38,38 @@ class Context:
         for b in self.__branches:
             trimed = fname[:len(b)]
             if (fname[:len(b)] == b):
-                return fname[len(b):]
-        return fname
+                return (trimed, fname[len(b):])
+        return ('', fname)
 
 
 class ChangeSet:
     def __init__(self, context):
+        self.errors  = []
         self.changes = []
         self.context = context
         for line in command_output(self.context.look_cmd % "changed").split("\n"):
-            log(line)
+            self.context.log(line)
             if line and line[0] in ("A", "U"):
-                self.add(Change(line[0], line[4:]))
+                self.add(Change(context, line[0], line[4:]))
+
+    def error(self, message):
+        self.errors.append(message)
 
     def add(self, change):
         self.changes.append(change)
 
     def verify(self):
+        if self.context.runas_init():
+            return
+        self.verify_log(self.context.commit_log)
         for change in self.changes:
-            log('verify %s' % change)
+            self.context.log('verify %s' % change)
             self.verify_path(change)
             self.verify_content(change)
+
+    def verify_log(self, ci_log):
+        if len(ci_log) == 0:
+            self.error("commit log can't be blank")
 
     def verify_path(self, change):
         paths = {
@@ -64,8 +79,10 @@ class ChangeSet:
             }
 
         def vp(fname, ftype):
-             assert self.context.trim(fname).startswith(paths[ftype]), \
-                 '%s must put in (%s)' % (ftype, fname)
+            folder = paths[ftype]
+            (branch, rpath) = self.context.trim(fname)
+            assert rpath.startswith(folder), \
+                 '%s must put in: %s%s' % (ftype, branch, folder)
 
         def verify_asset(change):
             if change.filetype != 'Other':
@@ -81,16 +98,27 @@ class ChangeSet:
 
     def report(self):
         ec = 0
+        print_err("----------------------------------------------------------")
+        print_err("Hong-Ju CSV Report:")
+        print_err("----------------------------------------------------------")
+        for err in self.errors:
+            print_err("    [ERROR] %s" % err)
+
         for change in self.changes:
             if len(change.errors) > 0:
                 ec += 1
                 print_err(change.filename)
                 for err in change.errors:
-                    print_err("[ERROR] %s" % err)
+                    print_err("    [ERROR] %s" % err)
+        if ec >0:
+            print_err("----------------------------------------------------------")
+            print_err("See:\n    %s" % 'http://wiki.hj.com/x/DABS')
+        print_err("----------------------------------------------------------")
         return ec
 
+
 class Change:
-    def __init__(self, action, filename):
+    def __init__(self, context, action, filename):
         def get_filetype(fname):
             ext_dict = {
                 'Javascript': ('.js'),
@@ -103,6 +131,7 @@ class Change:
                     return ftype
             return 'Other'
 
+        self.context = context
         self.action = action
         self.filename = filename
         self.filetype = get_filetype(filename)
@@ -110,7 +139,7 @@ class Change:
         self.errors = []
 
     def error(self, message):
-        log(message)
+        self.context.log(message)
         self.errors.append(message)
 
     def __repr__(self):
@@ -119,8 +148,6 @@ class Change:
 def print_err(str):
     sys.stderr.write("%s\n" % str)
 
-def log(str):
-    LOG_LEVEL > 0 and print_err('[LOG] %s' % str)
 
 
 def command_output(cmd):
@@ -182,17 +209,17 @@ Run pre-commit options on a repository transaction."""
         "%s", repos, look_opt, txn_or_rvn)
 
     context = Context()
+    context.set_backend(look_cmd)
     context.set_branches(repos)
-    context.look_cmd = look_cmd
 
-    log("<<< LOG_START")
-    log(context.get_branches())
-    log("opts.revision: %s" % opts.revision)
-    log("LOOK_CMD: %s" % look_cmd)
-    log(">>> LOG_END")
+    context.log("LOOK_CMD: %s" % look_cmd)
+    context.log('RUN_AS_INIT: %s' % context.runas_init())
+    context.log('BRANCHES: %s' % '; '.join(context.get_branches()))
+    context.log('COMMIT_LOG<<<\n%s<<<EOF' % context.commit_log)
 
     cs = ChangeSet(context)
     cs.verify()
+
     return cs.report()
     # check_cpp_files_for_tabs(look_cmd)
 
