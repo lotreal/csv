@@ -101,13 +101,15 @@ class ChangeSet:
         print_err("----------------------------------------------------------")
         print_err("Hong-Ju CSV Report:")
         print_err("----------------------------------------------------------")
-        for err in self.errors:
-            print_err("    [ERROR] %s" % err)
+        if len(self.errors) > 0:
+            for err in self.errors:
+                print_err("[ERROR] %s" % err)
+            print_err("----------------------------------------------------------")
 
         for change in self.changes:
             if len(change.errors) > 0:
                 ec += 1
-                print_err(change.filename)
+                print_err('<%s>  %s' % (change.action, change.filename))
                 for err in change.errors:
                     print_err("    [ERROR] %s" % err)
         if ec >0:
