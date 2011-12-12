@@ -5,33 +5,123 @@
 import os
 import sys
 
-exit_code = 0
+LOG_LEVEL = 0
 
-class Configuration:
+def dump(obj):
+    '''return a printable representation of an object for debugging'''
+    newobj=obj
+    if '__dict__' in dir(obj):
+        newobj=obj.__dict__
+        if ' object at ' in str(obj) and not newobj.has_key('__type__'):
+            newobj['__type__']=str(obj)
+        for attr in newobj:
+            newobj[attr]=dump(newobj[attr])
+    return newobj
+
+class Context:
     def __init__(self):
         self.__branches = []
 
-    def load_from_repos(self, repos):
+    def set_branches(self, repos):
         sys.path.append("%s/hooks" % repos)
         from config import branches
         self.__branches = branches
         
-    def get_branch(self):
+    def get_branches(self):
         return self.__branches
 
-_conf = Configuration()
+    def trim(self, fname):
+        for b in self.__branches:
+            trimed = fname[:len(b)]
+            if (fname[:len(b)] == b):
+                return fname[len(b):]
+        return fname
 
-def get_conf():
-    global _conf
-    return _conf
 
-def log(str):
-    pass
+class ChangeSet:
+    def __init__(self, context):
+        self.changes = []
+        self.context = context
+        for line in command_output(self.context.look_cmd % "changed").split("\n"):
+            log(line)
+            if line and line[0] in ("A", "U"):
+                self.add(Change(line[0], line[4:]))
+
+    def add(self, change):
+        self.changes.append(change)
+
+    def verify(self):
+        for change in self.changes:
+            log('verify %s' % change)
+            self.verify_path(change)
+            self.verify_content(change)
+
+    def verify_path(self, change):
+        paths = {
+            'Javascript':  'a/js/',
+            'Style': 'a/css/',
+            'Image': 'a/img/',
+            }
+
+        def vp(fname, ftype):
+             assert self.context.trim(fname).startswith(paths[ftype]), \
+                 '%s must put in (%s)' % (ftype, fname)
+
+        def verify_asset(change):
+            if change.filetype != 'Other':
+                return vp(change.filename, change.filetype)
+
+        try:
+            verify_asset(change)
+        except AssertionError, args:
+            change.error('%s' % args)
+
+    def verify_content(self, change):
+        pass
+
+    def report(self):
+        ec = 0
+        for change in self.changes:
+            if len(change.errors) > 0:
+                ec += 1
+                print_err(change.filename)
+                for err in change.errors:
+                    print_err("[ERROR] %s" % err)
+        return ec
+
+class Change:
+    def __init__(self, action, filename):
+        def get_filetype(fname):
+            ext_dict = {
+                'Javascript': ('.js'),
+                'Style': ('.css'),
+                'Image': ('.gif .jpg .png .jpeg'),
+                }
+            ext = os.path.splitext(fname)[1]
+            for ftype in ext_dict:
+                if ext and ext in ext_dict[ftype]:
+                    return ftype
+            return 'Other'
+
+        self.action = action
+        self.filename = filename
+        self.filetype = get_filetype(filename)
+
+        self.errors = []
+
+    def error(self, message):
+        log(message)
+        self.errors.append(message)
+
+    def __repr__(self):
+        return '{A:"%s", F:"%s", T:"%s" }' % (self.action, self.filename, self.filetype)
 
 def print_err(str):
-    global exit_code
-    exit_code += 1
     sys.stderr.write("%s\n" % str)
+
+def log(str):
+    LOG_LEVEL > 0 and print_err('[LOG] %s' % str)
+
 
 def command_output(cmd):
     " Capture a command's standard output. "
@@ -75,62 +165,6 @@ def check_cpp_files_for_tabs(look_cmd):
         return len(cpp_files_with_tabs)
 
 
-def check_assets_path(look_cmd):
-    """ Check assets's path. 
-
-    css:    a/css
-    js:     a/js
-    images: a/img"""
-    def is_js_file(fname):
-        return os.path.splitext(fname)[1] in ".js".split()
-
-    def is_css_file(fname):
-        return os.path.splitext(fname)[1] in ".css".split()
-
-    def is_img_file(fname):
-        return os.path.splitext(fname)[1] in ".gif .jpg .png .jpeg".split()
-
-    def trim_branches(fname):
-        for b in get_conf().get_branch():
-            trimed = fname[:len(b)]
-            if (fname[:len(b)] == b):
-                return fname[len(b):]
-        return fname
-
-    def js_path_error(fname):
-        return trim_branches(fname)[:5] != 'a/js/'
-
-    def css_path_error(fname):
-        return trim_branches(fname)[:6] != 'a/css/'
-
-    def img_path_error(fname):
-        return trim_branches(fname)[:6] != 'a/img/'
-
-    files = files_changed(look_cmd)
-
-    for i in [js for js in files 
-              if is_js_file(js) and js_path_error(js)]:
-        print_err('[rule=/a/js/]  but: "%s"' % i)
-
-    for i in [css for css in files 
-              if is_css_file(css) and css_path_error(css)]:
-        print_err('[rule=/a/css/] but: "%s"' % i)
-
-    for i in [img for img in files 
-              if is_img_file(img) and img_path_error(img)]:
-        print_err('[rule=/a/img/] but: "%s"' % i)
-
-
-    cpp_files_with_tabs = [
-        ff for ff in files_changed(look_cmd)
-        ]
-    # if len(cpp_files_with_tabs) > 0:
-    #     sys.stderr.write("The assets:\n%s\n"
-    #                      % "\n".join(cpp_files_with_tabs))
-    #     return len(cpp_files_with_tabs)
-
-
-
 
 def main():
     usage = """usage: %prog REPOS TXN
@@ -141,25 +175,27 @@ Run pre-commit options on a repository transaction."""
     parser.add_option("-r", "--revision",
                       help="Test mode. TXN actually refers to a revision.",
                       action="store_true", default=False)
-    errors = 0
 
     (opts, (repos, txn_or_rvn)) = parser.parse_args()
     look_opt = ("--transaction", "--revision")[opts.revision]
     look_cmd = "/usr/local/bin/svnlook %s %s %s %s" % (
         "%s", repos, look_opt, txn_or_rvn)
 
-    get_conf().load_from_repos(repos);
+    context = Context()
+    context.set_branches(repos)
+    context.look_cmd = look_cmd
 
     log("<<< LOG_START")
-    log(get_conf().get_branch())
+    log(context.get_branches())
     log("opts.revision: %s" % opts.revision)
     log("LOOK_CMD: %s" % look_cmd)
     log(">>> LOG_END")
+
+    cs = ChangeSet(context)
+    cs.verify()
+    return cs.report()
     # check_cpp_files_for_tabs(look_cmd)
-    check_assets_path(look_cmd)
 
 if __name__ == "__main__":
     import sys
-    main()
-    log('exit_code: %s' % exit_code)
-    sys.exit(exit_code)
+    sys.exit(main())
